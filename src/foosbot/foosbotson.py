@@ -1,8 +1,25 @@
 from slacker import Slacker
 import challonge
 
+import logging
+logger = logging.getLogger("foosbotson")
+logger.setLevel(logging.DEBUG)
+
+fh = logging.FileHandler('foosbotson.log')
+fh.setLevel(logging.DEBUG)
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+ch.setFormatter(formatter)
+
+logger.addHandler(fh)
+logger.addHandler(ch)
+
 class FoosBotson:
-    
+
     def __init__(self,
                  challonge_tournament_name,
                  api_token='xoxb-15050499792-qRGSf7w5Qv0Eitp7XMoC8w39',
@@ -11,16 +28,61 @@ class FoosBotson:
                  challonge_api_key='ubxCn7J3myaGWsYLeFliIIFD53HhUJQZdgUOlEvY',
                  challonge_username='nlafarge'):
 
+        self.logger = logging.getLogger('foosbotson.FoosBotson')
+
         self.slack = Slacker(api_token)
         self.slack_default_username = slack_username
         self.slack_default_icon_url = slack_icon_url
         self.nick_slack_id = 'U0EFNV9SN'
 
-        _tournament_name = 'amadeus-%s' % challonge_tournament_name
+        self.tournament_name = 'amadeus-%s' % challonge_tournament_name
+        self.logger.info("Connecting to tournament with id %s" % self.tournament_name)
+
         challonge.set_credentials(challonge_username, challonge_api_key)
-        self.tournament = challonge.tournaments.show(_tournament_name)
-        self.matches = challonge.matches.index(_tournament_name)
-        # TODO: associate matches with winners. Right now, the
+        self.tournament = challonge.tournaments.show(self.tournament_name)
+        self.participants = challonge.participants.index(self.tournament_name)
+        self.matches = challonge.matches.index(self.tournament_name)
+
+        # TODO api is broken for 2 stage tournaments - hack here with soup!
+        from bs4 import BeautifulSoup
+        import urllib2
+        soup = BeautifulSoup(urllib2.urlopen('http://amadeus.challonge.com/' + challonge_tournament_name).read())
+        participant_id_map = {p['display-name']: p['id'] for p in self.participants}
+        self.group_stage_id_map = {int(r['data-participant_id']): participant_id_map[r.get_text()] for r in
+                                   soup.find_all('div', {'class': 'inner_content'})}
+
+    def check_match_results(self):
+        matches = challonge.matches.index(self.tournament_name)
+
+        new_match_results = [m['winner-id'] for m in matches]
+        old_match_results = [m['winner-id'] for m in self.matches]
+
+        if new_match_results != old_match_results:
+            # These will differ when we enter the next stage of the tournament
+            if len(new_match_results) == len(old_match_results):
+                self.logger.debug("New Match Results Received")
+                self.logger.debug("Old Results" + str(old_match_results))
+                self.logger.debug("New Results" + str(new_match_results))
+                for i in range(len(matches)):
+                    new_winner = matches[i]['winner-id']
+                    old_winner = self.matches[i]['winner-id']
+                    if new_winner and new_winner != old_winner:
+                        winner_id = matches[i]['winner-id']
+                        loser_id = matches[i]['loser-id']
+
+                        # For the group stage hack to work
+                        if winner_id < 30000000 and loser_id < 30000000:
+                            winner_id = self.group_stage_id_map[winner_id]
+                            loser_id = self.group_stage_id_map[loser_id]
+
+                        winner_name = challonge.participants.show(self.tournament_name, winner_id)['display-name']
+                        loser_name = challonge.participants.show(self.tournament_name, loser_id)['display-name']
+
+                        ordered_scores = sorted(matches[i]['scores-csv'].split('-'), key=int, reverse=True)
+                        msg = ":foosball: %s defeated %s %s!! :darthfoosball:" % (winner_name, loser_name, '-'.join(ordered_scores))
+                        self.logger.info(msg)
+
+            self.matches = matches
 
     def add_reaction_to_all_in_channel(self, channel, reaction):
         resp = self.slack.channels.history(channel)
@@ -67,11 +129,20 @@ class FoosBotson:
 
         if not user_id:
             user_id = self.nick_slack_id
+
         response = self.slack.im.open(user=user_id)
         channel_id = response.body['channel']['id']
         self.post_message_to_chat(channel_id, message, username=username, icon=icon)
 
 
 if __name__ == '__main__':
-    foosbot = FoosBotson('weekly_4')
-    print foosbot.tournament['id']
+    foosbot = FoosBotson('bottesting')
+
+    import schedule
+    import time
+
+    schedule.every(10).seconds.do(foosbot.check_match_results)  # TODO tweak interval
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
