@@ -103,7 +103,7 @@ class FoosBotson:
                                 winner_name, loser_name, '-'.join(ordered_scores)
                             )
                         elif round_number == 2:
-                            self.post_direct_message(":foosball: :foosball: WE HAVE NEW FOOSBALL CHAMPIONS!!"
+                            self.post_message_to_chat_channel(":foosball: :foosball: WE HAVE NEW FOOSBALL CHAMPIONS!!"
                                                      " :foosball: :foosball:")
                             msg = ":darthfoosball: :darthfoosball: Congrats to *%s* for defeating *%s* by a score " \
                                   "of `%s` :darthfoosball: :darthfoosball:" % (
@@ -111,7 +111,7 @@ class FoosBotson:
                             )
                         else:
                             self.logger.error("Unexpected Round Number: %i" % round_number)
-                        self.post_direct_message(msg)
+                        self.post_message_to_chat_channel(msg)
                         self.logger.info(msg)
 
             self.matches = matches
@@ -147,12 +147,15 @@ class FoosBotson:
         except exceptions.HTTPError as e:
             self.logger.error(e)
 
-    def post_message_to_chat_channel(self, slack_channel, message, username=None, icon=None):
+    def post_message_to_chat_channel(self, message, slack_channel=None, username=None, icon=None):
         if not username:
             username = self.slack_default_username
 
         if not icon:
             icon = self.slack_default_icon_url
+
+        if not slack_channel:
+            slack_channel = '#acg-foosball'
 
         self.post_message_to_chat(slack_channel, message, username=username, icon=icon)
 
@@ -175,12 +178,12 @@ class FoosBotson:
 
 
 if __name__ == '__main__':
-    foosbot = FoosBotson('bottesting')
+    foosbot = FoosBotson('weekly_4')
 
     import schedule
     import time
 
-    schedule.every(5).minutes.do(foosbot.check_match_results)  # TODO tweak interval
+    schedule.every(5).minutes.do(foosbot.check_match_results)
 
     while True:
         schedule.run_pending()
