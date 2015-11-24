@@ -26,7 +26,7 @@ class FoosBotson:
     def __init__(self,
                  challonge_tournament_name,
                  api_token='xoxb-15050499792-qRGSf7w5Qv0Eitp7XMoC8w39',
-                 slack_username="Foo Botson",
+                 slack_username="Foos Botson",
                  slack_icon_url='http://i.imgur.com/GlnLNWg.jpg',
                  challonge_api_key='ubxCn7J3myaGWsYLeFliIIFD53HhUJQZdgUOlEvY',
                  challonge_username='nlafarge'):
