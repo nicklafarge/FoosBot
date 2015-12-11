@@ -1,8 +1,9 @@
 from requests import exceptions
 from slacker import Slacker
 import challonge
-
+import random
 import logging
+
 logger = logging.getLogger("foosbotson")
 logger.setLevel(logging.DEBUG)
 
@@ -19,8 +20,8 @@ ch.setFormatter(formatter)
 logger.addHandler(fh)
 logger.addHandler(ch)
 
-class FoosBotson:
 
+class FoosBotson:
     group_stage_id_map = None
 
     def __init__(self,
@@ -29,9 +30,11 @@ class FoosBotson:
                  slack_username="Foos Botson",
                  slack_icon_url='http://i.imgur.com/GlnLNWg.jpg',
                  challonge_api_key='ubxCn7J3myaGWsYLeFliIIFD53HhUJQZdgUOlEvY',
-                 challonge_username='nlafarge'):
+                 challonge_username='nlafarge',
+                 develop=False):
 
         self.logger = logging.getLogger('foosbotson.FoosBotson')
+        self.develop = develop
 
         self.slack = Slacker(api_token)
         self.slack_default_username = slack_username
@@ -92,26 +95,56 @@ class FoosBotson:
 
                         ordered_scores = sorted(matches[i]['scores-csv'].split('-'), key=int, reverse=True)
 
+                        negative_reaction_words = [
+                            'Ouch',
+                            'Bummer',
+                            'Yikes',
+                            'Oh Lordy',
+                            'Darn',
+                            'Crud-Buckets',
+                            'D\'oh',
+                            'Dangit to Heck!',
+                            'Rats',
+                        ]
+
                         round_number = matches[i]['round']
                         if matches[i]['group-id']:
-                            msg = ":foosball: *%s* has defeated *%s* by a score of `%s` :darthfoosball:" % (
-                                winner_name, loser_name, '-'.join(ordered_scores)
-                            )
+                            score_diff = int(ordered_scores[0]) - int(ordered_scores[1])
+                            if score_diff < 7:
+                                msg = ":foosball: *%s* has defeated *%s* by a score of `%s` :darthfoosball:" % (
+                                    winner_name, loser_name, '-'.join(ordered_scores)
+                                )
+                            elif score_diff < 10:
+                                reaction_word = random.choice(negative_reaction_words)
+                                msg = ":foosball: %s! That was a rough one eh? *%s* has defeated *%s* by a score of " \
+                                      "`%s` :darthfoosball:" % (
+                                          reaction_word, winner_name, loser_name, '-'.join(ordered_scores)
+                                      )
+                            else:
+                                msg = ":bagel: :foosball: :bagel: :snoop: BAGEL PARTY!!!! " \
+                                      "*%s* has defeated *%s* by a score of `%s` " \
+                                      ":snoop: :bagel: :darthfoosball: :bagel:" % (
+                                          winner_name, loser_name, '-'.join(ordered_scores)
+                                      )
                         elif round_number == 1:
                             msg = ":foosball: *%s* has defeated *%s* by a score of `%s` to " \
                                   "advance to the finals :darthfoosball:" % (
-                                winner_name, loser_name, '-'.join(ordered_scores)
-                            )
+                                      winner_name, loser_name, '-'.join(ordered_scores)
+                                  )
                         elif round_number == 2:
                             self.post_message_to_chat_channel(":foosball: :foosball: WE HAVE NEW FOOSBALL CHAMPIONS!!"
-                                                     " :foosball: :foosball:")
+                                                              " :foosball: :foosball:")
                             msg = ":darthfoosball: :darthfoosball: Congrats to *%s* for defeating *%s* by a score " \
                                   "of `%s` :darthfoosball: :darthfoosball:" % (
-                                winner_name, loser_name, '-'.join(ordered_scores)
-                            )
+                                      winner_name, loser_name, '-'.join(ordered_scores)
+                                  )
                         else:
                             self.logger.error("Unexpected Round Number: %i" % round_number)
-                        self.post_message_to_chat_channel(msg)
+
+                        if self.develop:
+                            self.post_direct_message(msg)
+                        else:
+                            self.post_message_to_chat_channel(msg)
                         self.logger.info(msg)
 
             self.matches = matches
@@ -177,13 +210,45 @@ class FoosBotson:
             self.logger.error(e)
 
 
+def parse_command_line():
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser(description="Foos Botson")
+
+    parser.add_argument(
+        '--tournament',
+        '-T',
+        help=(
+            'Name of the tournament to monitor'
+        ),
+        dest='tournament_name'
+    )
+    parser.add_argument(
+        '--develop',
+        '-D',
+        help=(
+            'Run in develop mode'
+        ),
+        dest='develop',
+        action='store_true',
+        default=False
+    )
+
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    foosbot = FoosBotson('weekly_4')
+    args = parse_command_line()
+
+    foosbot = FoosBotson(args.tournament_name, develop=args.develop)
 
     import schedule
     import time
 
-    schedule.every(5).minutes.do(foosbot.check_match_results)
+    if args.develop:
+        schedule.every(5).seconds.do(foosbot.check_match_results)
+    else:
+        schedule.every(5).minutes.do(foosbot.check_match_results)
 
     while True:
         schedule.run_pending()
