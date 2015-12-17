@@ -3,6 +3,7 @@ from slacker import Slacker
 import challonge
 import random
 import logging
+import time
 
 logger = logging.getLogger("foosbotson")
 logger.setLevel(logging.DEBUG)
@@ -50,7 +51,29 @@ class FoosBotson:
         self.participants = challonge.participants.index(self.tournament_name)
         self.matches = challonge.matches.index(self.tournament_name)
 
-        self.find_group_stage_ids()
+        reminders = 0
+        while reminders < 5 and not self.find_group_stage_ids():
+            self.logger.debug('Sleeping for 30 seconds while waiting for id map')
+            self.post_direct_message("Start the Group Stage Dumb Dumb :foosball: :snoop:")
+            reminders += 1
+            time.sleep(30)
+
+    def add_participants(self, participants_list):
+        if self.develop:
+            self.post_direct_message('The Teams for the Tournament %s are:\n```\n%s\n```' %
+                                     (self.tournament_name, '\n'.join(participants_list)))
+            # Remove any existing participants
+        existing_participants = challonge.participants.index(self.tournament_name)
+        for participant in existing_participants:
+            challonge.participants.destroy(self.tournament_name, participant['id'])
+        for team in participants_list:
+            challonge.participants.create(self.tournament_name, team)
+
+        while len(participants_list) != len(self.participants):
+            time.sleep(5)
+            self.participants = challonge.participants.index(self.tournament_name)
+            self.matches = challonge.matches.index(self.tournament_name)
+            return True
 
     def find_group_stage_ids(self):
         from bs4 import BeautifulSoup
@@ -59,10 +82,21 @@ class FoosBotson:
         url = urlparse.urljoin('http://amadeus.challonge.com/', self.challonge_tournament_name)
         soup = BeautifulSoup(urllib2.urlopen(url).read())
         participant_id_map = {p['display-name']: p['id'] for p in self.participants}
-        self.group_stage_id_map = {int(r['data-participant_id']): participant_id_map[r.get_text()] for r in
-                                   soup.find_all('div', {'class': 'inner_content'})}
+        try:
+            self.group_stage_id_map = {
+                int(r['data-participant_id']): participant_id_map[r.get_text()] for r in
+                soup.find_all('div', {'class': 'inner_content'})
+                }
+            self.logger.info("Successfully created group stage id map")
+            return True
+        except KeyError:
+            return False
 
     def check_match_results(self):
+        # Don't proceed if we don't have the map yet
+        if not self.group_stage_id_map:
+            return
+
         matches = challonge.matches.index(self.tournament_name)
 
         new_match_results = [m['winner-id'] for m in matches]
@@ -210,6 +244,30 @@ class FoosBotson:
             self.logger.error(e)
 
 
+def generate_teams():
+    from random import shuffle
+    members = [
+        'Kevin J',
+        'Nick L',
+        'Drew N',
+        'Jim M',
+        'Rory J',
+        'Justin A',
+        'Matt T',
+        'Matt S',
+        'Trey H',
+        'Brian W',
+        'Brian S',
+        'Lisa M'
+    ]
+    shuffle(members)
+    teams = zip(*(iter(members),) * 2)
+
+    from string import ascii_uppercase
+    team_names = ['Team %s (%s, %s)' % (ascii_uppercase[index], team[0], team[1]) for index, team in enumerate(teams)]
+    return team_names
+
+
 def parse_command_line():
     from argparse import ArgumentParser
 
@@ -233,6 +291,16 @@ def parse_command_line():
         action='store_true',
         default=False
     )
+    parser.add_argument(
+        '--generate-teams',
+        '-G',
+        help=(
+            'Generate Teams'
+        ),
+        dest='generated_teams',
+        action='store_true',
+        default=False
+    )
 
     return parser.parse_args()
 
@@ -240,7 +308,26 @@ def parse_command_line():
 if __name__ == '__main__':
     args = parse_command_line()
 
+    teams = []
     foosbot = FoosBotson(args.tournament_name, develop=args.develop)
+
+    if args.generated_teams:
+        print 'Generating teams....'
+        while not teams:
+            print '\nOkay, the teams are:\n'
+            teams = generate_teams()
+            print '\n'.join([str(t) for t in teams])
+            fair_input = None
+            while not fair_input:
+                fair_input = raw_input('Do these teams look good? (y/n)')
+                fair_input = fair_input.strip().lower()
+                if fair_input != 'y' and fair_input != 'n' and fair_input != 'yes' and fair_input != 'no':
+                    print '\nI didn\'t quite get that... please input yes or no'
+                    fair_input = None
+                elif fair_input[0] == 'n':
+                    teams = []
+        if foosbot.add_participants(teams):
+            logger.info('Successfully added teams\n' + '\n'.join([str(t) for t in teams]))
 
     import schedule
     import time
