@@ -3,7 +3,7 @@ from slacker import Slacker
 import challonge
 import random
 import logging
-import time
+import json
 
 logger = logging.getLogger("foosbotson")
 logger.setLevel(logging.DEBUG)
@@ -24,6 +24,7 @@ logger.addHandler(ch)
 
 class FoosBotson:
     group_stage_id_map = None
+    slack_name = 'foosbot'
 
     def __init__(self,
                  challonge_tournament_name,
@@ -51,12 +52,74 @@ class FoosBotson:
         self.participants = challonge.participants.index(self.tournament_name)
         self.matches = challonge.matches.index(self.tournament_name)
 
+        # The stage must be started manually - so annoy myself here until I do it
         reminders = 0
         while reminders < 5 and not self.find_group_stage_ids():
             self.logger.debug('Sleeping for 30 seconds while waiting for id map')
-            self.post_direct_message("Start the Group Stage Dumb Dumb :foosball: :snoop:")
+            self.post_direct_message("(Reminder %i of 5) Start the Group Stage Dumb Dumb :foosball: :snoop:" %
+                                     reminders)
             reminders += 1
             time.sleep(30)
+
+        # Start the real time messaging
+        import websocket
+        r = self.slack.rtm.start()
+        self.websocket_url = r.body["url"]
+        self.logger.info("Websocket URL: %s" % self.websocket_url)
+
+        websocket.enableTrace(True)
+        ws = websocket.WebSocketApp(self.websocket_url,
+                                    on_message=self.on_message,
+                                    on_error=self.on_error,
+                                    on_close=self.on_close,
+                                    on_open=self.on_open)
+        ws.run_forever()
+
+    def generate_reply(self, channel_id, message):
+        obj = {
+            "id": 1,
+            "type": "message",
+            "channel": channel_id,
+            "text": 'How dare you "%s" me!' % message,
+        }
+        return json.dumps(obj)
+
+    def on_message(self, ws, message):
+        message = json.loads(message)
+
+        # Only reply to messages
+        if 'type' not in message or message['type'] != 'message':
+            return
+
+        if self.is_targeted_message(self.slack_name, message) or self.is_direct_message(message):
+            uid = self.get_user_id(self.slack_name)
+            mention = "<@%s>" % uid
+            stripped_message = message["text"].replace(mention, "")
+
+            # Strip off the leading : if it exists
+            if stripped_message[0] == ':':
+                stripped_message = stripped_message[1:].strip()
+
+            self.logger.info("Got message from user %s, with text %s" %
+                             (self.get_user_name(message["user"]), stripped_message))
+
+            if self.get_user_name(message["user"]) == 'mtrice':
+                ws.send(self.generate_reply(message['channel'], "send such a dumb message to "))
+                return
+
+            reply = self.generate_reply(message["channel"], stripped_message)
+            self.logger.info("Replying with content: %s" % reply)
+            ws.send(reply)
+
+    def on_error(self, ws, error):
+        self.logger.error("Got a slack error: %s" % error)
+        raise Exception("Slack error: %s" % error)
+
+    def on_close(self, ws):
+        self.logger.warn('Connection closed')
+
+    def on_open(self, ws):
+        self.logger.info('Connection Opened')
 
     def add_participants(self, participants_list):
         if self.develop:
@@ -74,6 +137,29 @@ class FoosBotson:
             self.participants = challonge.participants.index(self.tournament_name)
             self.matches = challonge.matches.index(self.tournament_name)
             return True
+
+    def is_targeted_message(self, user_name, message):
+        uid = self.get_user_id(user_name)
+        mention = "<@%s>" % uid
+        return "text" in message and mention in message["text"] and self.slack_name != self.get_user_name(message['user'])
+
+    def is_direct_message(self, message):
+        return "channel" in message and \
+               message["channel"].startswith("D") and self.slack_name != self.get_user_name(message['user'])
+
+    def get_user_id(self, user_name):
+        r = self.slack.users.list()
+        for item in r.body["members"]:
+            if item["name"] == user_name:
+                return item["id"]
+        self.logger.warn("No user ID for name: %s" % user_name)
+
+    def get_user_name(self, user_id):
+        r = self.slack.users.list()
+        for item in r.body["members"]:
+            if item["id"] == user_id:
+                return item["name"]
+        L.warn("No username for ID: %s" % user_id)
 
     def find_group_stage_ids(self):
         from bs4 import BeautifulSoup
@@ -268,6 +354,27 @@ def generate_teams():
     return team_names
 
 
+def start_generate_teams(foosbot):
+    print 'Generating teams....'
+    teams = []
+
+    while not teams:
+        print '\nOkay, the teams are:\n'
+        teams = generate_teams()
+        print '\n'.join([str(t) for t in teams])
+        fair_input = None
+        while not fair_input:
+            fair_input = raw_input('Do these teams look good? (y/n)')
+            fair_input = fair_input.strip().lower()
+            if fair_input != 'y' and fair_input != 'n' and fair_input != 'yes' and fair_input != 'no':
+                print '\nI didn\'t quite get that... please input yes or no'
+                fair_input = None
+            elif fair_input[0] == 'n':
+                teams = []
+    if foosbot.add_participants(teams):
+        logger.info('Successfully added teams\n' + '\n'.join([str(t) for t in teams]))
+
+
 def parse_command_line():
     from argparse import ArgumentParser
 
@@ -308,26 +415,10 @@ def parse_command_line():
 if __name__ == '__main__':
     args = parse_command_line()
 
-    teams = []
     foosbot = FoosBotson(args.tournament_name, develop=args.develop)
 
     if args.generated_teams:
-        print 'Generating teams....'
-        while not teams:
-            print '\nOkay, the teams are:\n'
-            teams = generate_teams()
-            print '\n'.join([str(t) for t in teams])
-            fair_input = None
-            while not fair_input:
-                fair_input = raw_input('Do these teams look good? (y/n)')
-                fair_input = fair_input.strip().lower()
-                if fair_input != 'y' and fair_input != 'n' and fair_input != 'yes' and fair_input != 'no':
-                    print '\nI didn\'t quite get that... please input yes or no'
-                    fair_input = None
-                elif fair_input[0] == 'n':
-                    teams = []
-        if foosbot.add_participants(teams):
-            logger.info('Successfully added teams\n' + '\n'.join([str(t) for t in teams]))
+        start_generate_teams(foosbot)
 
     import schedule
     import time
