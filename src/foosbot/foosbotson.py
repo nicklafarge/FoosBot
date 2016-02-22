@@ -1,5 +1,6 @@
 from requests import exceptions
 from slacker import Slacker
+from argparse import ArgumentParser
 import challonge
 import random
 import logging
@@ -25,6 +26,7 @@ logger.addHandler(ch)
 class FoosBotson:
     group_stage_id_map = None
     slack_name = 'foosbot'
+    current_menu_option = None
 
     def __init__(self,
                  challonge_tournament_name,
@@ -33,7 +35,8 @@ class FoosBotson:
                  slack_icon_url='http://i.imgur.com/GlnLNWg.jpg',
                  challonge_api_key='ubxCn7J3myaGWsYLeFliIIFD53HhUJQZdgUOlEvY',
                  challonge_username='nlafarge',
-                 develop=False):
+                 develop=False,
+                 no_websocket=False):
 
         self.logger = logging.getLogger('foosbotson.FoosBotson')
         self.develop = develop
@@ -61,26 +64,50 @@ class FoosBotson:
             reminders += 1
             time.sleep(30)
 
-        # Start the real time messaging
-        import websocket
-        r = self.slack.rtm.start()
-        self.websocket_url = r.body["url"]
-        self.logger.info("Websocket URL: %s" % self.websocket_url)
+        if not no_websocket:
+            self.menu_options = {
+                'help': {
+                    'help_text': 'Display help menu',
+                    'detailed_help_text': 'Usage: help [option]\nGet help with a specific menu option',
+                    'callable': self.menu_help_text,
+                },
+                'gloat': {
+                    'help_text': 'Gloat about a non-tournament game',
+                    'detailed_help_text': 'Gloat about a non-tournament game',
+                    'callable': self.menu_gloat,
+                },
+                'change_name': {
+                    'help_text': 'Change the name of your team in a tournament',
+                    'detailed_help_text': 'Change the name of your team in a tournament',
+                    'callable': self.menu_help_text,
+                },
+                'generate_teams': {
+                    'help_text': 'Generate Teams for a tournament',
+                    'detailed_help_text': 'Generate teams for a tournament',
+                    'callable': self.menu_help_text,
+                }
+            }
 
-        websocket.enableTrace(True)
-        ws = websocket.WebSocketApp(self.websocket_url,
-                                    on_message=self.on_message,
-                                    on_error=self.on_error,
-                                    on_close=self.on_close,
-                                    on_open=self.on_open)
-        ws.run_forever()
+            # Start the real time messaging
+            import websocket
+            r = self.slack.rtm.start()
+            self.websocket_url = r.body["url"]
+            self.logger.info("Websocket URL: %s" % self.websocket_url)
+
+            websocket.enableTrace(True)
+            ws = websocket.WebSocketApp(self.websocket_url,
+                                        on_message=self.on_message,
+                                        on_error=self.on_error,
+                                        on_close=self.on_close,
+                                        on_open=self.on_open)
+            ws.run_forever()
 
     def generate_reply(self, channel_id, message):
         obj = {
             "id": 1,
             "type": "message",
             "channel": channel_id,
-            "text": 'How dare you "%s" me!' % message,
+            "text": message,
         }
         return json.dumps(obj)
 
@@ -103,23 +130,50 @@ class FoosBotson:
             self.logger.info("Got message from user %s, with text %s" %
                              (self.get_user_name(message["user"]), stripped_message))
 
-            if self.get_user_name(message["user"]) == 'mtrice':
-                ws.send(self.generate_reply(message['channel'], "send such a dumb message to "))
-                return
+            split_msg = stripped_message.split(' ')
 
-            reply = self.generate_reply(message["channel"], stripped_message)
-            self.logger.info("Replying with content: %s" % reply)
-            ws.send(reply)
+            if self.current_menu_option:
+                reply_message = self.current_menu_option(stripped_message)
+
+            elif split_msg[0] not in self.menu_options.keys():
+                reply_message = ""
+                for key in sorted(self.menu_options.keys()):
+                    reply_message += "{0:<15} {1:<20}\n".format(*(key, self.menu_options[key]['help_text']))
+            else:
+                callable = self.menu_options[split_msg[0]]['callable']
+                reply_message = callable('' if len(split_msg) == 1 else ' '.join(split_msg[1:]))
+
+            if reply_message:
+                reply_message = "```\n%s\n```" % reply_message
+                reply_json = self.generate_reply(message["channel"], reply_message)
+                self.send_websocket_reply(ws, reply_json)
+
+    def menu_help_text(self, message):
+        if message in self.menu_options.keys():
+            return self.menu_options[message]['detailed_help_text']
+        else:
+            return "Please specify a valid menu option [%s]" % ', '.join(sorted(self.menu_options.keys()))
+
+    def menu_gloat(self, message):
+        self.current_menu_option = self.menu_gloat
+        if not message:
+            return '"Perhaps the less we have, the more we are required to brag." - John Steinbeck\n' \
+                   'That said, what poor sucker lost in foosball?\n'
+        pass
+
+    def send_websocket_reply(self, ws, reply):
+        self.logger.info("Replying with content: %s" % reply)
+        ws.send(reply)
 
     def on_error(self, ws, error):
         self.logger.error("Got a slack error: %s" % error)
         raise Exception("Slack error: %s" % error)
 
     def on_close(self, ws):
-        self.logger.warn('Connection closed')
+        self.logger.warn('Connection closed at: %s' % ws.url)
 
     def on_open(self, ws):
-        self.logger.info('Connection Opened')
+        self.logger.info('Connection Opened at: %s' % ws.url)
 
     def add_participants(self, participants_list):
         if self.develop:
@@ -141,7 +195,8 @@ class FoosBotson:
     def is_targeted_message(self, user_name, message):
         uid = self.get_user_id(user_name)
         mention = "<@%s>" % uid
-        return "text" in message and mention in message["text"] and self.slack_name != self.get_user_name(message['user'])
+        return "text" in message and mention in message["text"] and self.slack_name != self.get_user_name(
+                message['user'])
 
     def is_direct_message(self, message):
         return "channel" in message and \
@@ -159,7 +214,7 @@ class FoosBotson:
         for item in r.body["members"]:
             if item["id"] == user_id:
                 return item["name"]
-        L.warn("No username for ID: %s" % user_id)
+        self.logger.warn("No username for ID: %s" % user_id)
 
     def find_group_stage_ids(self):
         from bs4 import BeautifulSoup
@@ -335,12 +390,14 @@ def generate_teams():
     members = [
         'Kevin J',
         'Nick L',
+        'Matt T',
+        'Jimmie H',
+        'Matt S',
+
         'Drew N',
         'Jim M',
         'Rory J',
         'Justin A',
-        'Matt T',
-        'Matt S',
         'Trey H',
         'Brian W',
         'Brian S',
@@ -376,37 +433,43 @@ def start_generate_teams(foosbot):
 
 
 def parse_command_line():
-    from argparse import ArgumentParser
-
     parser = ArgumentParser(description="Foos Botson")
 
     parser.add_argument(
-        '--tournament',
-        '-T',
-        help=(
-            'Name of the tournament to monitor'
-        ),
-        dest='tournament_name'
+            '--tournament',
+            '-T',
+            help=(
+                'Name of the tournament to monitor'
+            ),
+            dest='tournament_name'
     )
     parser.add_argument(
-        '--develop',
-        '-D',
-        help=(
-            'Run in develop mode'
-        ),
-        dest='develop',
-        action='store_true',
-        default=False
+            '--develop',
+            '-D',
+            help=(
+                'Run in develop mode'
+            ),
+            dest='develop',
+            action='store_true',
+            default=False
     )
     parser.add_argument(
-        '--generate-teams',
-        '-G',
-        help=(
-            'Generate Teams'
-        ),
-        dest='generated_teams',
-        action='store_true',
-        default=False
+            '--generate-teams',
+            '-G',
+            help=(
+                'Generate Teams'
+            ),
+            dest='generated_teams',
+            action='store_true',
+            default=False
+    )
+    parser.add_argument(
+            '--no-websocket',
+            '-N',
+            help=('Disable websocket realtime messaging'),
+            dest='no_websocket',
+            action='store_true',
+            default=False
     )
 
     return parser.parse_args()
@@ -415,7 +478,7 @@ def parse_command_line():
 if __name__ == '__main__':
     args = parse_command_line()
 
-    foosbot = FoosBotson(args.tournament_name, develop=args.develop)
+    foosbot = FoosBotson(args.tournament_name, develop=args.develop, no_websocket=args.no_websocket)
 
     if args.generated_teams:
         start_generate_teams(foosbot)
