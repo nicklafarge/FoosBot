@@ -225,8 +225,8 @@ class FoosBotson:
         participant_id_map = {p['display-name']: p['id'] for p in self.participants}
         try:
             self.group_stage_id_map = {
-                int(r['data-participant_id']): participant_id_map[r.get_text()] for r in
-                soup.find_all('div', {'class': 'inner_content'})
+                int(r['data-participant-id']): participant_id_map[r.find('title').get_text()] for r in
+                soup.find_all('g', {'class': 'match--player'})
                 }
             self.logger.info("Successfully created group stage id map")
             return True
@@ -261,6 +261,9 @@ class FoosBotson:
                             # Reload the map (this can happen if a stage is reset, new group ids are generated)
                             if not self.group_stage_id_map or winner_id not in self.group_stage_id_map:
                                 self.find_group_stage_ids()
+
+                            if winner_id not in self.group_stage_id_map or loser_id not in self.group_stage_id_map:
+                                self.logger.error("Winner ID %s not in group stage map: %s" % (str(winner_id), str(self.group_stage_id_map)))
 
                             winner_id = self.group_stage_id_map[winner_id]
                             loser_id = self.group_stage_id_map[loser_id]
@@ -393,15 +396,16 @@ def generate_teams():
         'Matt T',
         'Jimmie H',
         'Matt S',
-
         'Drew N',
+        'Brian S',
+
         'Jim M',
         'Rory J',
         'Justin A',
         'Trey H',
         'Brian W',
-        'Brian S',
-        'Lisa M'
+        'Lisa M',
+        'Andrew W'
     ]
     shuffle(members)
     teams = zip(*(iter(members),) * 2)
