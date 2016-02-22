@@ -5,6 +5,7 @@ import challonge
 import random
 import logging
 import json
+import time
 
 logger = logging.getLogger("foosbotson")
 logger.setLevel(logging.DEBUG)
@@ -398,14 +399,13 @@ def generate_teams():
         'Matt S',
         'Drew N',
         'Brian S',
-
-        'Jim M',
         'Rory J',
         'Justin A',
-        'Trey H',
         'Brian W',
         'Lisa M',
-        'Andrew W'
+        'Andrew W',
+        'Jim M',
+        'Trey H'
     ]
     shuffle(members)
     teams = zip(*(iter(members),) * 2)
