@@ -10,7 +10,7 @@ import time
 logger = logging.getLogger("foosbotson")
 logger.setLevel(logging.DEBUG)
 
-fh = logging.FileHandler('foosbotson.log')
+fh = logging.FileHandler('/var/log/foosbotson.log')
 fh.setLevel(logging.DEBUG)
 
 ch = logging.StreamHandler()
@@ -470,8 +470,16 @@ def parse_command_line():
     parser.add_argument(
             '--no-websocket',
             '-N',
-            help=('Disable websocket realtime messaging'),
+            help='Disable websocket realtime messaging',
             dest='no_websocket',
+            action='store_true',
+            default=False
+    )
+    parser.add_argument(
+            '--poll',
+            '-P',
+            help='Continuously poll for match results',
+            dest='polling_enabled',
             action='store_true',
             default=False
     )
@@ -487,14 +495,15 @@ if __name__ == '__main__':
     if args.generated_teams:
         start_generate_teams(foosbot)
 
-    import schedule
-    import time
+    if args.polling_enabled:
+        import schedule
+        import time
 
-    if args.develop:
-        schedule.every(5).seconds.do(foosbot.check_match_results)
-    else:
-        schedule.every(5).minutes.do(foosbot.check_match_results)
+        if args.develop:
+            schedule.every(5).seconds.do(foosbot.check_match_results)
+        else:
+            schedule.every(5).minutes.do(foosbot.check_match_results)
 
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
